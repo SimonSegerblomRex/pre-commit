@@ -67,8 +67,25 @@ def _install_hook_script(
         overwrite: bool = False,
         skip_on_missing_config: bool = False,
         git_dir: str | None = None,
-) -> None:
+) -> int:
     hook_path, legacy_path = _hook_paths(hook_type, git_dir=git_dir)
+
+    # If the hooks directory is a symlink we need to be careful
+    if os.path.islink(os.path.dirname(hook_path)):
+        git_dir = git_dir if git_dir is not None else git.get_git_common_dir()
+        # If the hooks directory links to a directory outside the
+        # git repo we shouldn't try to mess with it
+        repo_dir = os.path.dirname(os.path.realpath(git_dir))
+        if os.path.commonpath(
+            [repo_dir, os.path.realpath(hook_path)],
+        ) != repo_dir:
+            logger.error(
+                'Cowardly refusing to install hook script to a directory '
+                'outside of the git repo.\n'
+                f'hint: {os.path.dirname(hook_path)} is a symbolic link '
+                f'to {os.path.realpath(os.path.dirname(hook_path))}.',
+            )
+            return 1
 
     os.makedirs(os.path.dirname(hook_path), exist_ok=True)
 
@@ -109,6 +126,7 @@ def _install_hook_script(
     make_executable(hook_path)
 
     output.write_line(f'pre-commit installed at {hook_path}')
+    return 0
 
 
 def install(
@@ -128,12 +146,14 @@ def install(
         return 1
 
     for hook_type in _hook_types(config_file, hook_types):
-        _install_hook_script(
+        ret = _install_hook_script(
             config_file, hook_type,
             overwrite=overwrite,
             skip_on_missing_config=skip_on_missing_config,
             git_dir=git_dir,
         )
+        if ret != 0:
+            return ret
 
     if hooks:
         install_hooks(config_file, store)
